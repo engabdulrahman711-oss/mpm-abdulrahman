@@ -12,6 +12,7 @@ const NAV_KEY       = "mpm-nav-state-v1";   // remembers which project + tab use
 const TAB_ORDER_KEY = "mpm-tab-order-v1";   // remembers custom order of project detail tabs
 const GOOGLE_ACCOUNT_KEY = "mpm-google-account-v1"; // remembers which Google account is linked (display info only — never the token)
 const AUTO_BACKUP_KEY = "mpm-auto-backup-v1"; // tracks when the last automatic local backup file was downloaded
+const ROLLOVER_KEY   = "mpm-rollover-v1";    // tracks which date we last ran the end-of-day rollover check
 
 // ─── Image compression helper ─────────────────────────────────────────────────
 // Compress a base64 image to max ~200KB JPEG before storing
@@ -251,6 +252,8 @@ const loadGoogleAccount = () => { try { const v = localStorage.getItem(GOOGLE_AC
 const saveGoogleAccount = (acc) => { try { acc ? localStorage.setItem(GOOGLE_ACCOUNT_KEY, JSON.stringify(acc)) : localStorage.removeItem(GOOGLE_ACCOUNT_KEY); } catch {} };
 const loadAutoBackupState = () => { try { const v = localStorage.getItem(AUTO_BACKUP_KEY); return v ? JSON.parse(v) : null; } catch { return null; } };
 const saveAutoBackupState = (s) => { try { localStorage.setItem(AUTO_BACKUP_KEY, JSON.stringify(s)); } catch {} };
+const loadRolloverState = () => { try { const v = localStorage.getItem(ROLLOVER_KEY); return v ? JSON.parse(v) : null; } catch { return null; } };
+const saveRolloverState = (s) => { try { localStorage.setItem(ROLLOVER_KEY, JSON.stringify(s)); } catch {} };
 
 // ─── THEMES ───────────────────────────────────────────────────────────────────
 const THEMES = {
@@ -597,6 +600,41 @@ function Modal({ title, onClose, children, wide }) {
 }
 
 // ─── AddRow ───────────────────────────────────────────────────────────────────
+
+// ─── AutoResizeInput ──────────────────────────────────────────────────────────
+// A <textarea> that looks and behaves exactly like a single-line <input>, but
+// unlike <input> it correctly scrolls to follow the cursor on Android — the root
+// cause of text appearing to "disappear" after ~8 words when typing long task
+// names. It grows vertically only when the user explicitly adds a newline (which
+// submits via Enter anyway), otherwise stays one line.
+function AutoResizeInput({ value, onChange, onKeyDown, placeholder, style, autoFocus }) {
+  const ref = useRef();
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.style.height = "auto";
+      ref.current.style.height = ref.current.scrollHeight + "px";
+    }
+  }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={onChange}
+      onKeyDown={onKeyDown}
+      placeholder={placeholder}
+      autoFocus={autoFocus}
+      rows={1}
+      style={{
+        ...style,
+        resize:"none",
+        overflow:"hidden",
+        lineHeight:"1.4",
+        display:"block",
+      }}
+    />
+  );
+}
+
 function AddRow({ placeholder, onAdd, fields }) {
   const [vals, setVals] = useState(fields ? Object.fromEntries(fields.map(f => [f.key,""])) : { text:"" });
   const set = (k,v) => setVals(p => ({...p,[k]:v}));
@@ -613,8 +651,9 @@ function AddRow({ placeholder, onAdd, fields }) {
           onChange={e=>set(f.key,e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()}
           style={{...is,flex:f.flex||1,width:"auto"}}/>
       )) : (
-        <input placeholder={placeholder} value={vals.text}
-          onChange={e=>set("text",e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()}
+        <AutoResizeInput placeholder={placeholder} value={vals.text}
+          onChange={e=>set("text",e.target.value)}
+          onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); handle(); } }}
           style={{...is,flex:1}}/>
       )}
       {!fields && (
@@ -961,6 +1000,107 @@ function generateProcurementReport(projectName, items) {
 // email, etc. however they prefer.
 // ═══════════════════════════════════════════════════════════════════════════════
 const AUTO_BACKUP_INTERVAL_DAYS = 3; // remind if it's been this many days since the last backup
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TASK ROLLOVER DIALOG
+// Appears once per day when the app is opened and there are unfinished daily
+// tasks from previous days. For each task the user can choose to:
+//   - Roll over → move to today (date updated, stays in the list)
+//   - Archive   → remove from daily list and put in an archive log
+//   - Skip      → leave as-is for now (will appear again tomorrow)
+// The dialog only appears once per calendar day regardless of how many times
+// the app is opened.
+// ═══════════════════════════════════════════════════════════════════════════════
+function TaskRolloverDialog({ overdueItems, onDone }) {
+  // overdueItems: [{projectId, projectName, taskId, text, date}]
+  // decisions:    {taskId: "rollover" | "archive" | "skip"}
+  const [decisions, setDecisions] = useState(() =>
+    Object.fromEntries(overdueItems.map(t => [t.taskId, "rollover"]))
+  );
+
+  const setDecision = (taskId, action) =>
+    setDecisions(d => ({ ...d, [taskId]: action }));
+
+  const overdueCount = overdueItems.length;
+
+  return (
+    <div style={{
+      position:"fixed", inset:0, background:"rgba(0,0,0,0.88)", zIndex:950,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:"16px",
+    }}>
+      <div style={{
+        background:C.card, border:`1px solid ${C.amber}44`, borderRadius:14,
+        width:"100%", maxWidth:480, maxHeight:"90vh", display:"flex", flexDirection:"column",
+        boxShadow:"0 24px 60px rgba(0,0,0,0.6)",
+      }}>
+        {/* Header */}
+        <div style={{ padding:"20px 20px 14px", borderBottom:`1px solid ${C.border}`, flexShrink:0 }}>
+          <div style={{ color:C.amber, fontSize:11, letterSpacing:2, textTransform:"uppercase", fontWeight:700, marginBottom:6 }}>
+            ⚠ Unfinished Tasks
+          </div>
+          <div style={{ color:C.text, fontSize:16, fontWeight:800 }}>
+            {overdueCount} task{overdueCount!==1?"s":""} from previous days
+          </div>
+          <div style={{ color:C.muted, fontSize:12, marginTop:4 }}>
+            What do you want to do with each one?
+          </div>
+        </div>
+
+        {/* Task list */}
+        <div style={{ flex:1, overflowY:"auto", padding:"12px 16px" }}>
+          {overdueItems.map(item => {
+            const decision = decisions[item.taskId];
+            return (
+              <div key={item.taskId} style={{
+                background:C.surface, border:`1px solid ${C.border}`,
+                borderRadius:9, padding:"12px 14px", marginBottom:10,
+              }}>
+                <div style={{ marginBottom:8 }}>
+                  <div style={{ color:C.muted, fontSize:10, marginBottom:3 }}>
+                    {item.projectName} · {item.date}
+                  </div>
+                  <div style={{ color:C.text, fontSize:13, fontWeight:600, lineHeight:1.4 }}>
+                    {item.text}
+                  </div>
+                </div>
+                <div style={{ display:"flex", gap:6 }}>
+                  {[
+                    ["rollover", "📅 Roll to Today", C.accent],
+                    ["archive",  "📦 Archive",       C.green],
+                    ["skip",     "⏭ Skip",           C.dim],
+                  ].map(([action, label, color]) => (
+                    <button key={action} onClick={()=>setDecision(item.taskId, action)}
+                      style={{
+                        flex:1, background: decision===action ? color+"22" : "transparent",
+                        border:`1px solid ${decision===action ? color : C.border2}`,
+                        color: decision===action ? color : C.muted,
+                        borderRadius:7, padding:"6px 0", cursor:"pointer",
+                        fontSize:11, fontWeight: decision===action ? 700 : 500,
+                        fontFamily:"inherit", transition:"all 0.15s",
+                      }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding:"14px 16px", borderTop:`1px solid ${C.border}`, flexShrink:0 }}>
+          <button onClick={()=>onDone(decisions)}
+            style={{ width:"100%", background:C.accent, border:"none", borderRadius:9,
+                     color:"#fff", padding:"13px", cursor:"pointer",
+                     fontSize:14, fontWeight:800, fontFamily:"inherit" }}>
+            ✓ Apply Decisions
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function AutoBackupReminder({ data }) {
   const [dismissedToday, setDismissedToday] = useState(false);
@@ -1668,11 +1808,10 @@ function DailyTaskRow({ t, tIdx, proj, pTasksLength, projects, onToggle, onReord
         </button>
         {/* Text */}
         {panelEditing ? (
-          <input ref={panelInputRef} value={panelDraft} onChange={e=>setPanelDraft(e.target.value)}
-            onBlur={commitPanelEdit}
-            onKeyDown={e=>{if(e.key==="Enter")commitPanelEdit();if(e.key==="Escape"){setPanelDraft(t.text);setPanelEditing(false);}}}
+          <AutoResizeInput value={panelDraft} onChange={e=>setPanelDraft(e.target.value)}
+            onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();commitPanelEdit();}if(e.key==="Escape"){setPanelDraft(t.text);setPanelEditing(false);}}}
             autoFocus
-            style={{...getInputStyle(),flex:1,padding:"3px 7px",fontSize:13,height:28}}/>
+            style={{...getInputStyle(),flex:1,padding:"3px 7px",fontSize:13}}/>
         ) : (
           <span onDoubleClick={()=>{setPanelDraft(t.text);setPanelEditing(true);}}
             style={{ flex:1,color:t.done?C.dim:C.text,fontSize:13,
@@ -1794,11 +1933,10 @@ function PersonalTaskRow({ t, tIdx, tasksLength, onToggle, onReorder, onEditTask
           {t.done&&"✓"}
         </button>
         {editing ? (
-          <input ref={inputRef} value={draft} onChange={e=>setDraft(e.target.value)}
-            onBlur={commitEdit}
-            onKeyDown={e=>{if(e.key==="Enter")commitEdit();if(e.key==="Escape"){setDraft(t.text);setEditing(false);}}}
+          <AutoResizeInput value={draft} onChange={e=>setDraft(e.target.value)}
+            onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();commitEdit();}if(e.key==="Escape"){setDraft(t.text);setEditing(false);}}}
             autoFocus
-            style={{...getInputStyle(),flex:1,padding:"4px 8px",fontSize:14,height:30}}/>
+            style={{...getInputStyle(),flex:1,padding:"4px 8px",fontSize:14}}/>
         ) : (
           <span onDoubleClick={()=>{setDraft(t.text);setEditing(true);}}
             style={{ flex:1,color:t.done?C.dim:C.text,fontSize:14,
@@ -1940,12 +2078,12 @@ function PersonalTasksPanel({ tasks, onUpdateTasks, onClose }) {
           })}
         </div>
 
-        <div style={{ padding:"14px 16px",borderTop:`1px solid ${C.border}`,background:C.surface,flexShrink:0,display:"flex",gap:8 }}>
-          <input value={addText} onChange={e=>setAddText(e.target.value)}
+        <div style={{ padding:"14px 16px",borderTop:`1px solid ${C.border}`,background:C.surface,flexShrink:0,display:"flex",gap:8,alignItems:"flex-end" }}>
+          <AutoResizeInput value={addText} onChange={e=>setAddText(e.target.value)}
             placeholder="Add a personal task…"
-            onKeyDown={e=>{ if(e.key==="Enter") addTask(); }}
+            onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); addTask(); } }}
             style={{...is,flex:1,padding:"9px 12px",fontSize:14}}/>
-          <button onClick={addTask} style={{...bp,padding:"0 18px"}}>+ Add</button>
+          <button onClick={addTask} style={{...bp,padding:"0 18px",height:42,flexShrink:0}}>+ Add</button>
         </div>
       </div>
     </div>
@@ -2004,6 +2142,7 @@ function DailyPanel({ projects, onUpdateProject, onClose, profile }) {
   const bs = getBtnSecondary();
   const [reportCopied, setReportCopied] = useState(false);
   const [showReportMenu, setShowReportMenu] = useState(false);
+  const [showArchive, setShowArchive] = useState(false);
 
   const shareText = async (text, title) => {
     if (navigator.share) {
@@ -2074,6 +2213,12 @@ function DailyPanel({ projects, onUpdateProject, onClose, profile }) {
                   </>
                 )}
               </div>
+              <button onClick={()=>setShowArchive(v=>!v)}
+                style={{...bs, padding:"7px 14px", fontSize:12,
+                         borderColor: showArchive ? C.accent+"55" : C.border2,
+                         color: showArchive ? C.accent : C.muted }}>
+                📦 {showArchive ? "Tasks" : "Archive"}
+              </button>
               <button onClick={onClose} style={{...bs,padding:"7px 14px",fontSize:12}}>✕ Close</button>
             </div>
           </div>
@@ -2110,6 +2255,42 @@ function DailyPanel({ projects, onUpdateProject, onClose, profile }) {
         })()}
 
         <div style={{ flex:1,overflowY:"auto",padding:"16px 0" }}>
+
+          {/* ── Archive view ── */}
+          {showArchive ? (
+            <div style={{ padding:"0 16px" }}>
+              <div style={{ color:C.accent, fontSize:11, letterSpacing:1.5, textTransform:"uppercase",
+                            fontWeight:700, marginBottom:12, fontFamily:"'JetBrains Mono',monospace" }}>
+                📦 Archived Tasks
+              </div>
+              {projects.every(p => !(p.tasks?.archived||[]).length) && (
+                <div style={{ color:C.dim, fontSize:14, textAlign:"center", padding:"40px 0", fontStyle:"italic" }}>
+                  No archived tasks yet — archive completed or old tasks from the rollover dialog.
+                </div>
+              )}
+              {projects.filter(p=>(p.tasks?.archived||[]).length>0).map(p => (
+                <div key={p.id} style={{ marginBottom:16 }}>
+                  <div style={{ color:C.muted, fontSize:11, fontWeight:700, marginBottom:6 }}>{p.name}</div>
+                  {(p.tasks.archived||[]).map(t => (
+                    <div key={t.id} style={{
+                      background:C.surface, border:`1px solid ${C.border}`,
+                      borderRadius:8, padding:"8px 12px", marginBottom:6,
+                      display:"flex", alignItems:"flex-start", gap:10,
+                    }}>
+                      <span style={{ color:C.green, fontSize:12, flexShrink:0, marginTop:1 }}>✓</span>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ color:C.dim, fontSize:12, lineHeight:1.4 }}>{t.text}</div>
+                        <div style={{ color:C.border2, fontSize:10, marginTop:2, fontFamily:"'JetBrains Mono',monospace" }}>
+                          {t.date} · archived {new Date(t.archivedAt).toLocaleDateString("en-GB",{day:"2-digit",month:"short"})}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          ) : (
+          <>
           {/*
             Dynamic project ordering: only show projects that actually have at least
             one daily task today, and order them by when their FIRST task was added
@@ -2141,6 +2322,8 @@ function DailyPanel({ projects, onUpdateProject, onClose, profile }) {
                 onAddTask={addTask}
               />
             ))}
+          </>
+          )} {/* end of archive/tasks toggle */}
         </div>
       </div>
     </div>
@@ -2191,13 +2374,13 @@ function DailyProjectGroup({ proj, projects, onToggle, onReorder, onEditTask, on
         />
       ))}
 
-      <div style={{ display:"flex",gap:6,padding:"6px 24px" }}>
-        <input value={addText} onChange={e=>setAddText(e.target.value)}
+      <div style={{ display:"flex",gap:6,padding:"6px 24px",alignItems:"flex-end" }}>
+        <AutoResizeInput value={addText} onChange={e=>setAddText(e.target.value)}
           placeholder="Add task…"
-          onKeyDown={e=>{ if(e.key==="Enter"){ onAddTask(proj.id,addText); setAddText(""); } }}
-          style={{...is,fontSize:13,padding:"7px 10px"}}/>
+          onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); onAddTask(proj.id,addText); setAddText(""); } }}
+          style={{...is,fontSize:13,padding:"7px 10px",flex:1}}/>
         <button onClick={()=>{ onAddTask(proj.id,addText); setAddText(""); }}
-          style={{...bp,padding:"0 12px",fontSize:13,flexShrink:0}}>+</button>
+          style={{...bp,padding:"0 12px",fontSize:13,flexShrink:0,height:38}}>+</button>
       </div>
     </div>
   );
@@ -4741,6 +4924,63 @@ export default function App() {
   const [showProfileEdit,setShowProfileEdit] = useState(false);
   const [showThemePicker,setShowThemePicker] = useState(false);
   const [showDataMgr,setShowDataMgr]         = useState(false);
+
+  // ── Rollover dialog ──────────────────────────────────────────────────────────
+  const [rolloverItems, setRolloverItems] = useState([]); // pending overdue tasks to decide on
+
+  const checkRollover = (projects) => {
+    const todayStr = today();
+    const state = loadRolloverState();
+    // Only show once per calendar day
+    if (state?.lastChecked === todayStr) return;
+    saveRolloverState({ lastChecked: todayStr });
+
+    const items = [];
+    (projects||[]).forEach(p => {
+      (p.tasks?.daily||[]).forEach(t => {
+        if (!t.done && t.date && t.date < todayStr) {
+          items.push({
+            projectId: p.id,
+            projectName: p.name,
+            taskId: t.id,
+            text: t.text,
+            date: t.date,
+          });
+        }
+      });
+    });
+    if (items.length > 0) setRolloverItems(items);
+  };
+
+  const handleRolloverDone = (decisions) => {
+    setRolloverItems([]);
+    const todayStr = today();
+    // Apply decisions to each project
+    const updatedProjects = (data.projects||[]).map(p => {
+      const affected = rolloverItems.filter(i => i.projectId === p.id);
+      if (affected.length === 0) return p;
+
+      let daily = [...(p.tasks?.daily||[])];
+      const archived = [...(p.tasks?.archived||[])];
+
+      affected.forEach(item => {
+        const dec = decisions[item.taskId];
+        if (dec === "rollover") {
+          daily = daily.map(t => t.id===item.taskId ? {...t, date:todayStr} : t);
+        } else if (dec === "archive") {
+          const task = daily.find(t=>t.id===item.taskId);
+          if (task) {
+            archived.push({...task, archivedAt: new Date().toISOString()});
+            daily = daily.filter(t=>t.id!==item.taskId);
+          }
+        }
+        // "skip" = leave as-is
+      });
+
+      return {...p, tasks:{...p.tasks, daily, archived}};
+    });
+    _commit({...data, projects: updatedProjects});
+  };
   const [setupDone,setSetupDone]       = useState(false);
   const [themeKey,setThemeKey]         = useState("navy");
   const [notifDismissed,setNotifDismissed] = useState(false);
@@ -4771,6 +5011,8 @@ export default function App() {
         setActiveProject(nav.activeProject);
       }
       setLoading(false);
+      // Check for overdue tasks once per day after data loads
+      if (d) checkRollover(d.projects || []);
     };
     init();
   },[]);
@@ -4862,6 +5104,34 @@ export default function App() {
     const existing = loadNavState() || {};
     saveNavState({ ...existing, activeProject, tab: activeProject === existing.activeProject ? existing.tab : "overview" });
   }, [activeProject]);
+
+  // ── Android Back button handler ─────────────────────────────────────────────
+  // Push a dummy history state whenever we navigate "deeper" (open a project or
+  // modal). When the user presses the hardware Back button, the browser pops this
+  // dummy state and fires "popstate" — we intercept it and close the topmost layer
+  // instead of letting the browser exit the PWA.
+  useEffect(() => {
+    // Push a new history entry so "Back" has somewhere to go
+    const anyOpen = activeProject || showDaily || showPersonalTasks || showProfileEdit || showThemePicker || showDataMgr;
+    if (anyOpen) {
+      window.history.pushState({ mpmLayer: true }, "");
+    }
+  }, [activeProject, showDaily, showPersonalTasks, showProfileEdit, showThemePicker, showDataMgr]);
+
+  useEffect(() => {
+    const handlePop = (e) => {
+      // Close the topmost layer in priority order (most modal-like first)
+      if (showDataMgr)        { setShowDataMgr(false);        window.history.pushState({ mpmLayer: true }, ""); return; }
+      if (showThemePicker)    { setShowThemePicker(false);     window.history.pushState({ mpmLayer: true }, ""); return; }
+      if (showProfileEdit)    { setShowProfileEdit(false);     window.history.pushState({ mpmLayer: true }, ""); return; }
+      if (showPersonalTasks)  { setShowPersonalTasks(false);   window.history.pushState({ mpmLayer: true }, ""); return; }
+      if (showDaily)          { setShowDaily(false);           window.history.pushState({ mpmLayer: true }, ""); return; }
+      if (activeProject)      { setActiveProject(null);        return; }
+      // Nothing open — let the browser handle it naturally (exit PWA on Dashboard)
+    };
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+  }, [activeProject, showDaily, showPersonalTasks, showProfileEdit, showThemePicker, showDataMgr]);
 
   if(loading) return (
     <div style={{ height:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center" }}>
@@ -5004,6 +5274,11 @@ export default function App() {
       </main>
 
       {showNew         && <NewProjectModal onAdd={addProject}  onClose={()=>setShowNew(false)}/>}
+      {/* Rollover dialog — appears once per day when there are overdue unfinished tasks */}
+      {rolloverItems.length > 0 && (
+        <TaskRolloverDialog overdueItems={rolloverItems} onDone={handleRolloverDone}/>
+      )}
+
       {showDaily       && <DailyPanel projects={data.projects} onUpdateProject={updateProject} onClose={()=>setShowDaily(false)} profile={profile}/>}
       {showPersonalTasks && <PersonalTasksPanel tasks={data.personalTasks} onUpdateTasks={(next)=>_commit({...data, personalTasks: next})} onClose={()=>setShowPersonalTasks(false)}/>}
       {showThemePicker && <ThemePickerModal currentTheme={themeKey} onSelect={k=>{setThemeKey(k);}} onClose={()=>setShowThemePicker(false)}/>}
