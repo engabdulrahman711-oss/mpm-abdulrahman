@@ -743,8 +743,9 @@ function generateDailyReport(projects, profileName) {
 
   projects.forEach(p => {
     const daily = p.tasks?.daily || [];
-    const done  = daily.filter(t=>t.done);
-    const pending = daily.filter(t=>!t.done);
+    const done    = daily.filter(t=>t.done);
+    const inProg  = daily.filter(t=>!t.done && t.inProgress);
+    const pending = daily.filter(t=>!t.done && !t.inProgress);
     const notesCount = daily.filter(t=>t.notes && t.notes.trim()).length;
 
     if (daily.length === 0 && (p.steps||[]).every(s=>s.status!=="active")) return; // skip silent projects
@@ -757,6 +758,13 @@ function generateDailyReport(projects, profileName) {
     if (done.length > 0) {
       lines.push(`✅ Completed (${done.length}):`);
       done.forEach(t => {
+        lines.push(`  • ${t.text}`);
+        if (t.notes && t.notes.trim()) lines.push(`     📝 ${t.notes.trim()}`);
+      });
+    }
+    if (inProg.length > 0) {
+      lines.push(`🔵 In Progress (${inProg.length}):`);
+      inProg.forEach(t => {
         lines.push(`  • ${t.text}`);
         if (t.notes && t.notes.trim()) lines.push(`     📝 ${t.notes.trim()}`);
       });
@@ -1737,6 +1745,16 @@ function DailyTaskRow({ t, tIdx, proj, pTasksLength, projects, onToggle, onReord
   const noteFileRef = useRef();
   const [uploadingImg, setUploadingImg] = useState(false);
 
+  const archiveTask = () => {
+    const proj2 = projects.find(p=>p.id===proj.id);
+    if (!proj2) return;
+    const task = (proj2.tasks.daily||[]).find(tt=>tt.id===t.id);
+    if (!task) return;
+    const archived = [...(proj2.tasks.archived||[]), {...task, archivedAt: new Date().toISOString()}];
+    const daily    = (proj2.tasks.daily||[]).filter(tt=>tt.id!==t.id);
+    onUpdateProject({...proj2, tasks:{...proj2.tasks, daily, archived}});
+  };
+
   const commitPanelEdit = () => {
     const txt = panelDraft.trim();
     if (txt && txt !== t.text) onEditTask(proj.id, t.id, txt);
@@ -1798,13 +1816,17 @@ function DailyTaskRow({ t, tIdx, proj, pTasksLength, projects, onToggle, onReord
             style={{ background:"none",border:"none",color:tIdx===pTasksLength-1?C.border2:C.dim,
                      cursor:tIdx===pTasksLength-1?"default":"pointer",padding:"1px 4px",fontSize:10,lineHeight:1 }}>▼</button>
         </div>
-        {/* Checkbox */}
+        {/* Checkbox — cycles: Pending ⬜ → In Progress 🔵 → Done ✓ → Pending */}
         <button onClick={()=>onToggle(proj.id,t.id)}
-          style={{ width:20,height:20,borderRadius:"50%",border:`2px solid ${t.done?C.green:C.dim}`,
-                   background:t.done?C.green+"22":"transparent",cursor:"pointer",
-                   display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,
-                   color:C.green,fontSize:11,transition:"all 0.2s" }}>
-          {t.done&&"✓"}
+          title={t.done ? "Done — tap to reset" : t.inProgress ? "In Progress — tap to complete" : "Pending — tap to start"}
+          style={{
+            width:20, height:20, borderRadius:"50%", cursor:"pointer", flexShrink:0,
+            display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, transition:"all 0.2s",
+            border: t.done ? `2px solid ${C.green}` : t.inProgress ? `2px solid ${C.accent}` : `2px solid ${C.dim}`,
+            background: t.done ? C.green+"22" : t.inProgress ? C.accent+"22" : "transparent",
+            color: t.done ? C.green : C.accent,
+          }}>
+          {t.done ? "✓" : t.inProgress ? "▶" : ""}
         </button>
         {/* Text */}
         {panelEditing ? (
@@ -1814,8 +1836,12 @@ function DailyTaskRow({ t, tIdx, proj, pTasksLength, projects, onToggle, onReord
             style={{...getInputStyle(),flex:1,padding:"3px 7px",fontSize:13}}/>
         ) : (
           <span onDoubleClick={()=>{setPanelDraft(t.text);setPanelEditing(true);}}
-            style={{ flex:1,color:t.done?C.dim:C.text,fontSize:13,
-                     textDecoration:t.done?"line-through":"none",cursor:"text",
+            style={{ flex:1,
+                     color: t.done ? C.dim : t.inProgress ? C.accent : C.text,
+                     fontSize:13,
+                     textDecoration:t.done?"line-through":"none",
+                     fontWeight: t.inProgress && !t.done ? 600 : 400,
+                     cursor:"text",
                      overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>
             {t.text}
           </span>
@@ -1835,6 +1861,11 @@ function DailyTaskRow({ t, tIdx, proj, pTasksLength, projects, onToggle, onReord
         {!panelEditing && (
           <button onClick={()=>{setPanelDraft(t.text);setPanelEditing(true);}}
             style={{ background:"none",border:"none",color:C.dim,cursor:"pointer",fontSize:11,opacity:0.6,flexShrink:0,padding:"0 2px" }}>✎</button>
+        )}
+        {/* Archive — only shown when task is done, so user can move completed tasks to archive */}
+        {t.done && !panelEditing && (
+          <button onClick={archiveTask} title="Archive this completed task"
+            style={{ background:"none",border:"none",color:C.green,cursor:"pointer",fontSize:11,opacity:0.7,flexShrink:0,padding:"0 2px" }}>📦</button>
         )}
         {/* Delete */}
         <button onClick={()=>onRemoveTask(proj.id,t.id)}
@@ -2094,17 +2125,24 @@ function DailyPanel({ projects, onUpdateProject, onClose, profile }) {
   const todayStr = today();
   const todayLabel = new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
 
-  const allTasks = projects.flatMap(p =>
+  const allTasks   = projects.flatMap(p =>
     (p.tasks.daily||[]).map(t => ({ ...t, projectId: p.id, projectName: p.name, statusColor: getStatus(p.status).color }))
   );
-  const pending   = allTasks.filter(t => !t.done);
-  const done      = allTasks.filter(t =>  t.done);
-  const pctDone   = allTasks.length ? Math.round((done.length/allTasks.length)*100) : 0;
+  const inProgress = allTasks.filter(t => !t.done &&  t.inProgress);
+  const pending    = allTasks.filter(t => !t.done && !t.inProgress);
+  const done       = allTasks.filter(t =>  t.done);
+  const pctDone    = allTasks.length ? Math.round((done.length/allTasks.length)*100) : 0;
 
   const toggle = (projectId, taskId) => {
     const proj = projects.find(p=>p.id===projectId);
     if (!proj) return;
-    const updated = { ...proj, tasks: { ...proj.tasks, daily: proj.tasks.daily.map(t=>t.id===taskId?{...t,done:!t.done}:t) } };
+    // Cycle: Pending → InProgress → Done → Pending
+    const updated = { ...proj, tasks: { ...proj.tasks, daily: proj.tasks.daily.map(t => {
+      if (t.id !== taskId) return t;
+      if (!t.done && !t.inProgress) return {...t, inProgress:true,  done:false}; // Pending → InProgress
+      if (!t.done &&  t.inProgress) return {...t, inProgress:false, done:true};  // InProgress → Done
+      return {...t, inProgress:false, done:false};                                // Done → Pending
+    })}};
     onUpdateProject(updated);
   };
 
@@ -2361,7 +2399,10 @@ ${projectSections.map(({p, done, pending, active, overdue, noteImgs, galleryImgs
               <div style={{ width:`${pctDone}%`,height:"100%",background:`linear-gradient(90deg,${C.accent},${C.accentDim})`,borderRadius:6,transition:"width 0.5s" }}/>
             </div>
             <span style={{ color:C.accent,fontWeight:800,fontSize:13,fontFamily:"'JetBrains Mono',monospace",minWidth:36 }}>{pctDone}%</span>
-            <span style={{ color:C.muted,fontSize:12 }}>{done.length}/{allTasks.length}</span>
+            <span style={{ color:C.muted,fontSize:12 }}>
+              {done.length}/{allTasks.length}
+              {inProgress.length > 0 && <span style={{ color:C.accent, marginLeft:6 }}>▶ {inProgress.length}</span>}
+            </span>
           </div>
         </div>
 
