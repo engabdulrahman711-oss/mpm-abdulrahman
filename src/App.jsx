@@ -1020,6 +1020,83 @@ const AUTO_BACKUP_INTERVAL_DAYS = 3; // remind if it's been this many days since
 // The dialog only appears once per calendar day regardless of how many times
 // the app is opened.
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DONE YESTERDAY DIALOG
+// Shown once per day at app open if there are completed tasks from previous days.
+// Simple yes/no: archive all of them or keep them visible in the daily list.
+// ═══════════════════════════════════════════════════════════════════════════════
+function DoneYesterdayDialog({ items, onArchiveAll, onKeep }) {
+  // Group by project for a cleaner summary view
+  const byProject = items.reduce((acc, item) => {
+    if (!acc[item.projectId]) acc[item.projectId] = { name: item.projectName, tasks: [] };
+    acc[item.projectId].tasks.push(item);
+    return acc;
+  }, {});
+
+  return (
+    <div style={{
+      position:"fixed", inset:0, background:"rgba(0,0,0,0.88)", zIndex:950,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:"16px",
+    }}>
+      <div style={{
+        background:C.card, border:`1px solid ${C.green}44`, borderRadius:14,
+        width:"100%", maxWidth:440, display:"flex", flexDirection:"column",
+        boxShadow:"0 24px 60px rgba(0,0,0,0.6)",
+      }}>
+        {/* Header */}
+        <div style={{ padding:"20px 20px 14px", borderBottom:`1px solid ${C.border}`, flexShrink:0 }}>
+          <div style={{ color:C.green, fontSize:11, letterSpacing:2, textTransform:"uppercase", fontWeight:700, marginBottom:6 }}>
+            ✅ Completed Yesterday
+          </div>
+          <div style={{ color:C.text, fontSize:16, fontWeight:800 }}>
+            {items.length} task{items.length!==1?"s":""} from previous days
+          </div>
+          <div style={{ color:C.muted, fontSize:12, marginTop:4 }}>
+            عايز تأرشفهم ومايظهروش في قايمة المهام؟
+          </div>
+        </div>
+
+        {/* Task summary by project */}
+        <div style={{ flex:1, overflowY:"auto", padding:"12px 16px", maxHeight:280 }}>
+          {Object.values(byProject).map(({ name, tasks }) => (
+            <div key={name} style={{ marginBottom:12 }}>
+              <div style={{ color:C.muted, fontSize:11, fontWeight:700, marginBottom:4 }}>{name}</div>
+              {tasks.map(t => (
+                <div key={t.taskId} style={{
+                  display:"flex", alignItems:"center", gap:8,
+                  padding:"5px 10px", borderRadius:7, marginBottom:4,
+                  background:C.surface, border:`1px solid ${C.border}`,
+                }}>
+                  <span style={{ color:C.green, fontSize:12, flexShrink:0 }}>✓</span>
+                  <span style={{ color:C.dim, fontSize:12, flex:1 }}>{t.text}</span>
+                  <span style={{ color:C.border2, fontSize:10 }}>{t.date}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+
+        {/* Action buttons */}
+        <div style={{ padding:"14px 16px", borderTop:`1px solid ${C.border}`, display:"flex", gap:10, flexShrink:0 }}>
+          <button onClick={onKeep}
+            style={{ flex:1, background:"transparent", border:`1px solid ${C.border2}`,
+                     borderRadius:9, color:C.muted, padding:"12px",
+                     cursor:"pointer", fontSize:13, fontFamily:"inherit" }}>
+            لأ، سيبهم ظاهرين
+          </button>
+          <button onClick={onArchiveAll}
+            style={{ flex:2, background:C.green, border:"none", borderRadius:9,
+                     color:"#fff", padding:"12px",
+                     cursor:"pointer", fontSize:14, fontWeight:800, fontFamily:"inherit" }}>
+            📦 أيوه، أرشفهم كلهم
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TaskRolloverDialog({ overdueItems, onDone }) {
   // overdueItems: [{projectId, projectName, taskId, text, date}]
   // decisions:    {taskId: "rollover" | "archive" | "skip"}
@@ -5101,7 +5178,8 @@ export default function App() {
   const [showDataMgr,setShowDataMgr]         = useState(false);
 
   // ── Rollover dialog ──────────────────────────────────────────────────────────
-  const [rolloverItems, setRolloverItems] = useState([]); // pending overdue tasks to decide on
+  const [rolloverItems,  setRolloverItems]  = useState([]); // pending overdue tasks to decide on
+  const [doneYesterday,  setDoneYesterday]  = useState([]); // completed tasks from previous days
 
   const checkRollover = (projects) => {
     const todayStr = today();
@@ -5110,21 +5188,37 @@ export default function App() {
     if (state?.lastChecked === todayStr) return;
     saveRolloverState({ lastChecked: todayStr });
 
-    const items = [];
+    const overdueItems = [];
+    const completedItems = [];
+
     (projects||[]).forEach(p => {
       (p.tasks?.daily||[]).forEach(t => {
-        if (!t.done && t.date && t.date < todayStr) {
-          items.push({
-            projectId: p.id,
-            projectName: p.name,
-            taskId: t.id,
-            text: t.text,
-            date: t.date,
-          });
+        if (t.date && t.date < todayStr) {
+          if (!t.done && !t.inProgress) {
+            // Unfinished tasks from previous days → rollover dialog
+            overdueItems.push({
+              projectId: p.id,
+              projectName: p.name,
+              taskId: t.id,
+              text: t.text,
+              date: t.date,
+            });
+          } else if (t.done) {
+            // Completed tasks from previous days → archive suggestion
+            completedItems.push({
+              projectId: p.id,
+              projectName: p.name,
+              taskId: t.id,
+              text: t.text,
+              date: t.date,
+            });
+          }
         }
       });
     });
-    if (items.length > 0) setRolloverItems(items);
+
+    if (overdueItems.length > 0) setRolloverItems(overdueItems);
+    if (completedItems.length > 0) setDoneYesterday(completedItems);
   };
 
   const handleRolloverDone = (decisions) => {
@@ -5155,6 +5249,31 @@ export default function App() {
       return {...p, tasks:{...p.tasks, daily, archived}};
     });
     _commit({...data, projects: updatedProjects});
+  };
+
+  const handleDoneYesterdayArchive = () => {
+    // Archive all completed tasks from previous days
+    const updatedProjects = (data.projects||[]).map(p => {
+      const affected = doneYesterday.filter(i => i.projectId === p.id);
+      if (affected.length === 0) return p;
+      let daily    = [...(p.tasks?.daily||[])];
+      const archived = [...(p.tasks?.archived||[])];
+      affected.forEach(item => {
+        const task = daily.find(t=>t.id===item.taskId);
+        if (task) {
+          archived.push({...task, archivedAt: new Date().toISOString()});
+          daily = daily.filter(t=>t.id!==item.taskId);
+        }
+      });
+      return {...p, tasks:{...p.tasks, daily, archived}};
+    });
+    setDoneYesterday([]);
+    _commit({...data, projects: updatedProjects});
+  };
+
+  const handleDoneYesterdayKeep = () => {
+    setDoneYesterday([]);
+    // Keep tasks as-is — user will see them in the list until they decide
   };
   const [setupDone,setSetupDone]       = useState(false);
   const [themeKey,setThemeKey]         = useState("navy");
@@ -5452,6 +5571,15 @@ export default function App() {
       {/* Rollover dialog — appears once per day when there are overdue unfinished tasks */}
       {rolloverItems.length > 0 && (
         <TaskRolloverDialog overdueItems={rolloverItems} onDone={handleRolloverDone}/>
+      )}
+
+      {/* Done-yesterday dialog — appears once per day to suggest archiving completed tasks */}
+      {rolloverItems.length === 0 && doneYesterday.length > 0 && (
+        <DoneYesterdayDialog
+          items={doneYesterday}
+          onArchiveAll={handleDoneYesterdayArchive}
+          onKeep={handleDoneYesterdayKeep}
+        />
       )}
 
       {showDaily       && <DailyPanel projects={data.projects} onUpdateProject={updateProject} onClose={()=>setShowDaily(false)} profile={profile}/>}
