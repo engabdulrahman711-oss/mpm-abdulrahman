@@ -784,6 +784,26 @@ function generateDailyReport(projects, profileName) {
       activeSteps.forEach(s => lines.push(`  • ${s.title}`));
     }
 
+    // Pending procurement items — what needs to be ordered/followed up today
+    const procurements = (p.procurements||[]);
+    const pendingProcurement = procurements.filter(pr => pr.status === "pending");
+    const orderedProcurement = procurements.filter(pr => pr.status === "ordered");
+    if (pendingProcurement.length > 0) {
+      lines.push(`📦 Procurement Needed (${pendingProcurement.length}):`);
+      pendingProcurement.forEach(pr => {
+        const unit = pr.unit || "No.";
+        const supplier = pr.supplier ? ` — ${pr.supplier}` : "";
+        lines.push(`  • ${pr.item} · ${pr.qty} ${unit}${supplier}`);
+      });
+    }
+    if (orderedProcurement.length > 0) {
+      lines.push(`🚚 Ordered / Awaiting Delivery (${orderedProcurement.length}):`);
+      orderedProcurement.forEach(pr => {
+        const supplier = pr.supplier ? ` (${pr.supplier})` : "";
+        lines.push(`  • ${pr.item} · ${pr.qty} ${pr.unit||"No."}${supplier}`);
+      });
+    }
+
     // Overdue approvals
     const todayStr = today();
     const overdue = (p.approvals||[]).filter(a=>a.status==="pending" && a.dueDate && a.dueDate < todayStr);
@@ -2299,12 +2319,14 @@ function DailyPanel({ projects, onUpdateProject, onClose, profile }) {
       const pending = daily.filter(t=>!t.done);
       const active  = (p.steps||[]).filter(s=>s.status==="active");
       const overdue = (p.approvals||[]).filter(a=>a.status==="pending"&&a.dueDate&&a.dueDate<todayStr);
+      const pendingProcurement = (p.procurements||[]).filter(pr=>pr.status==="pending");
+      const orderedProcurement = (p.procurements||[]).filter(pr=>pr.status==="ordered");
       // Collect note images from all tasks
       const noteImgs = daily.flatMap(t=>(t.noteImages||[]).map(img=>({...img, taskText:t.text, done:t.done})));
       // Gallery images
       const galleryImgs = (p.images||[]).filter(img=>img.src&&img.src.startsWith("data:"));
-      if (!daily.length && !active.length && !overdue.length) return null;
-      return { p, done, pending, active, overdue, noteImgs, galleryImgs };
+      if (!daily.length && !active.length && !overdue.length && !pendingProcurement.length) return null;
+      return { p, done, pending, active, overdue, pendingProcurement, orderedProcurement, noteImgs, galleryImgs };
     }).filter(Boolean);
 
     const tasksHTML = (items, icon, color) => items.map(t=>
@@ -2343,13 +2365,15 @@ function DailyPanel({ projects, onUpdateProject, onClose, profile }) {
 <body>
 <h1>📋 Daily Site Report</h1>
 <p class="sub">📅 ${dateLabel}${profile?.name?" · 👤 "+profile.name:""}</p>
-${projectSections.map(({p, done, pending, active, overdue, noteImgs, galleryImgs})=>`
+${projectSections.map(({p, done, pending, active, overdue, pendingProcurement, orderedProcurement, noteImgs, galleryImgs})=>`
 <div class="project">
   <h2>🏗 ${p.name}</h2>
   <div class="meta">${[p.client,p.location].filter(Boolean).join(" · ")}</div>
   ${done.length?`<div class="section-label">✅ Completed (${done.length})</div><ul>${tasksHTML(done,"✅","86efac")}</ul>`:""}
   ${pending.length?`<div class="section-label">⏳ Pending (${pending.length})</div><ul>${tasksHTML(pending,"⏳","fbbf24")}</ul>`:""}
   ${active.length?`<div class="section-label">▶ In Progress</div><ul>${active.map(s=>`<li style="color:#93c5fd">▶ ${s.title}</li>`).join("")}</ul>`:""}
+  ${pendingProcurement.length?`<div class="section-label">📦 Procurement Needed (${pendingProcurement.length})</div><ul>${pendingProcurement.map(pr=>`<li style="color:#fb923c">📦 ${pr.item} · ${pr.qty} ${pr.unit||"No."}${pr.supplier?" — "+pr.supplier:""}</li>`).join("")}</ul>`:""}
+  ${orderedProcurement.length?`<div class="section-label">🚚 Ordered / Awaiting Delivery (${orderedProcurement.length})</div><ul>${orderedProcurement.map(pr=>`<li style="color:#a78bfa">🚚 ${pr.item} · ${pr.qty} ${pr.unit||"No."}${pr.supplier?" ("+pr.supplier+")":""}</li>`).join("")}</ul>`:""}
   ${overdue.length?`<div class="section-label">🔴 Overdue Approvals</div><ul>${overdue.map(a=>`<li style="color:#f87171">🔴 ${a.title}</li>`).join("")}</ul>`:""}
   ${noteImgs.length?`<div class="section-label">📷 Task Photos (${noteImgs.length})</div>${imagesHTML(noteImgs)}`:""}
   ${galleryImgs.length?`<div class="section-label">🖼 Site Gallery (${galleryImgs.length})</div>${imagesHTML(galleryImgs)}`:""}
