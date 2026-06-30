@@ -793,7 +793,8 @@ function generateDailyReport(projects, profileName) {
       pendingProcurement.forEach(pr => {
         const unit = pr.unit || "No.";
         const supplier = pr.supplier ? ` — ${pr.supplier}` : "";
-        lines.push(`  • ${pr.item} · ${pr.qty} ${unit}${supplier}`);
+        const reqDate = pr.requestDate ? ` (req. ${pr.requestDate})` : "";
+        lines.push(`  • ${pr.item} · ${pr.qty} ${unit}${supplier}${reqDate}`);
       });
     }
     if (orderedProcurement.length > 0) {
@@ -1002,6 +1003,7 @@ function generateProcurementReport(projectName, items) {
     lines.push(`${idx+1}. *${row.item}*`);
     lines.push(`   Qty: ${row.qty} ${row.unit || "No."}`);
     if (row.supplier) lines.push(`   Supplier: ${row.supplier}`);
+    if (row.requestDate) lines.push(`   Requested: ${row.requestDate}`);
     lines.push(`   Status: ${st.icon || ""} ${st.label}`.trim());
     lines.push("");
   });
@@ -2372,7 +2374,7 @@ ${projectSections.map(({p, done, pending, active, overdue, pendingProcurement, o
   ${done.length?`<div class="section-label">✅ Completed (${done.length})</div><ul>${tasksHTML(done,"✅","86efac")}</ul>`:""}
   ${pending.length?`<div class="section-label">⏳ Pending (${pending.length})</div><ul>${tasksHTML(pending,"⏳","fbbf24")}</ul>`:""}
   ${active.length?`<div class="section-label">▶ In Progress</div><ul>${active.map(s=>`<li style="color:#93c5fd">▶ ${s.title}</li>`).join("")}</ul>`:""}
-  ${pendingProcurement.length?`<div class="section-label">📦 Procurement Needed (${pendingProcurement.length})</div><ul>${pendingProcurement.map(pr=>`<li style="color:#fb923c">📦 ${pr.item} · ${pr.qty} ${pr.unit||"No."}${pr.supplier?" — "+pr.supplier:""}</li>`).join("")}</ul>`:""}
+  ${pendingProcurement.length?`<div class="section-label">📦 Procurement Needed (${pendingProcurement.length})</div><ul>${pendingProcurement.map(pr=>`<li style="color:#fb923c">📦 ${pr.item} · ${pr.qty} ${pr.unit||"No."}${pr.supplier?" — "+pr.supplier:""}${pr.requestDate?" · req. "+pr.requestDate:""}</li>`).join("")}</ul>`:""}
   ${orderedProcurement.length?`<div class="section-label">🚚 Ordered / Awaiting Delivery (${orderedProcurement.length})</div><ul>${orderedProcurement.map(pr=>`<li style="color:#a78bfa">🚚 ${pr.item} · ${pr.qty} ${pr.unit||"No."}${pr.supplier?" ("+pr.supplier+")":""}</li>`).join("")}</ul>`:""}
   ${overdue.length?`<div class="section-label">🔴 Overdue Approvals</div><ul>${overdue.map(a=>`<li style="color:#f87171">🔴 ${a.title}</li>`).join("")}</ul>`:""}
   ${noteImgs.length?`<div class="section-label">📷 Task Photos (${noteImgs.length})</div>${imagesHTML(noteImgs)}`:""}
@@ -3391,7 +3393,7 @@ function ProcurementTab({ items, onUpdate, projectName }) {
   const remove    = (id)    => onUpdate(items.filter(i=>i.id!==id));
   const add = ({item,qty,supplier}) => {
     if(!item?.trim()) return;
-    onUpdate([...items,{id:uid(),item:item.trim(),qty:qty||"1",unit:"No.",status:"pending",supplier:supplier||""}]);
+    onUpdate([...items,{id:uid(),item:item.trim(),qty:qty||"1",unit:"No.",status:"pending",supplier:supplier||"",requestDate:today()}]);
   };
   const is=getInputStyle();
   const bs=getBtnSecondary();
@@ -3501,7 +3503,7 @@ function ProcurementTab({ items, onUpdate, projectName }) {
                 )}
               </div>
               {/* Row 2: qty + supplier */}
-              <div style={{ display:"flex",gap:8 }}>
+              <div style={{ display:"flex",gap:8,marginBottom:6 }}>
                 <input value={row.qty} onChange={e=>setField(row.id,"qty",e.target.value)}
                   disabled={shareMode}
                   placeholder="Qty"
@@ -3514,6 +3516,14 @@ function ProcurementTab({ items, onUpdate, projectName }) {
                   disabled={shareMode}
                   placeholder="Supplier"
                   style={{...is,flex:1,padding:"4px 8px",fontSize:12,color:C.muted}}/>
+              </div>
+              {/* Row 3: request date — auto-stamped when added, editable if needed */}
+              <div style={{ display:"flex",alignItems:"center",gap:6 }}>
+                <span style={{ color:C.dim, fontSize:11, flexShrink:0 }}>📅</span>
+                <input type="date" value={row.requestDate||""} onChange={e=>setField(row.id,"requestDate",e.target.value)}
+                  disabled={shareMode}
+                  style={{...is,width:"auto",padding:"3px 6px",fontSize:11,color:C.dim,flexShrink:0}}/>
+                <span style={{ color:C.border2, fontSize:10 }}>requested</span>
               </div>
             </div>
           </div>
