@@ -735,6 +735,7 @@ function MicButton({ onResult, size = 28 }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 function generateDailyReport(projects, profileName) {
   const dateStr = new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+  const todayStr = today();
   let lines = [];
   lines.push(`📋 *DAILY SITE REPORT*`);
   lines.push(`📅 ${dateStr}`);
@@ -784,17 +785,18 @@ function generateDailyReport(projects, profileName) {
       activeSteps.forEach(s => lines.push(`  • ${s.title}`));
     }
 
-    // Pending procurement items — what needs to be ordered/followed up today
+    // Procurement requested TODAY only — items ordered on other days won't
+    // re-appear in every subsequent daily report, keeping it focused on
+    // "what did I ask for today" rather than a running backlog.
     const procurements = (p.procurements||[]);
-    const pendingProcurement = procurements.filter(pr => pr.status === "pending");
-    const orderedProcurement = procurements.filter(pr => pr.status === "ordered");
+    const pendingProcurement = procurements.filter(pr => pr.status === "pending" && pr.requestDate === todayStr);
+    const orderedProcurement = procurements.filter(pr => pr.status === "ordered" && pr.requestDate === todayStr);
     if (pendingProcurement.length > 0) {
       lines.push(`📦 Procurement Needed (${pendingProcurement.length}):`);
       pendingProcurement.forEach(pr => {
         const unit = pr.unit || "No.";
         const supplier = pr.supplier ? ` — ${pr.supplier}` : "";
-        const reqDate = pr.requestDate ? ` (req. ${pr.requestDate})` : "";
-        lines.push(`  • ${pr.item} · ${pr.qty} ${unit}${supplier}${reqDate}`);
+        lines.push(`  • ${pr.item} · ${pr.qty} ${unit}${supplier}`);
       });
     }
     if (orderedProcurement.length > 0) {
@@ -806,7 +808,6 @@ function generateDailyReport(projects, profileName) {
     }
 
     // Overdue approvals
-    const todayStr = today();
     const overdue = (p.approvals||[]).filter(a=>a.status==="pending" && a.dueDate && a.dueDate < todayStr);
     if (overdue.length > 0) {
       lines.push(`🔴 Overdue Approvals:`);
@@ -2321,8 +2322,8 @@ function DailyPanel({ projects, onUpdateProject, onClose, profile }) {
       const pending = daily.filter(t=>!t.done);
       const active  = (p.steps||[]).filter(s=>s.status==="active");
       const overdue = (p.approvals||[]).filter(a=>a.status==="pending"&&a.dueDate&&a.dueDate<todayStr);
-      const pendingProcurement = (p.procurements||[]).filter(pr=>pr.status==="pending");
-      const orderedProcurement = (p.procurements||[]).filter(pr=>pr.status==="ordered");
+      const pendingProcurement = (p.procurements||[]).filter(pr=>pr.status==="pending" && pr.requestDate===todayStr);
+      const orderedProcurement = (p.procurements||[]).filter(pr=>pr.status==="ordered" && pr.requestDate===todayStr);
       // Collect note images from all tasks
       const noteImgs = daily.flatMap(t=>(t.noteImages||[]).map(img=>({...img, taskText:t.text, done:t.done})));
       // Gallery images
@@ -2374,7 +2375,7 @@ ${projectSections.map(({p, done, pending, active, overdue, pendingProcurement, o
   ${done.length?`<div class="section-label">✅ Completed (${done.length})</div><ul>${tasksHTML(done,"✅","86efac")}</ul>`:""}
   ${pending.length?`<div class="section-label">⏳ Pending (${pending.length})</div><ul>${tasksHTML(pending,"⏳","fbbf24")}</ul>`:""}
   ${active.length?`<div class="section-label">▶ In Progress</div><ul>${active.map(s=>`<li style="color:#93c5fd">▶ ${s.title}</li>`).join("")}</ul>`:""}
-  ${pendingProcurement.length?`<div class="section-label">📦 Procurement Needed (${pendingProcurement.length})</div><ul>${pendingProcurement.map(pr=>`<li style="color:#fb923c">📦 ${pr.item} · ${pr.qty} ${pr.unit||"No."}${pr.supplier?" — "+pr.supplier:""}${pr.requestDate?" · req. "+pr.requestDate:""}</li>`).join("")}</ul>`:""}
+  ${pendingProcurement.length?`<div class="section-label">📦 Procurement Needed (${pendingProcurement.length})</div><ul>${pendingProcurement.map(pr=>`<li style="color:#fb923c">📦 ${pr.item} · ${pr.qty} ${pr.unit||"No."}${pr.supplier?" — "+pr.supplier:""}</li>`).join("")}</ul>`:""}
   ${orderedProcurement.length?`<div class="section-label">🚚 Ordered / Awaiting Delivery (${orderedProcurement.length})</div><ul>${orderedProcurement.map(pr=>`<li style="color:#a78bfa">🚚 ${pr.item} · ${pr.qty} ${pr.unit||"No."}${pr.supplier?" ("+pr.supplier+")":""}</li>`).join("")}</ul>`:""}
   ${overdue.length?`<div class="section-label">🔴 Overdue Approvals</div><ul>${overdue.map(a=>`<li style="color:#f87171">🔴 ${a.title}</li>`).join("")}</ul>`:""}
   ${noteImgs.length?`<div class="section-label">📷 Task Photos (${noteImgs.length})</div>${imagesHTML(noteImgs)}`:""}
